@@ -15,17 +15,21 @@ import (
 // Helps vncaddrbook use proxy from environment for call of vncviewer
 // usage: `vncaddrbook.exe -ViewerPath proxy.exe`
 // case `vncviewer' is empty then `vncviewer` is `.\vncviewer`
-// case $http_proxy or $all_proxy has `socks://:1080“ then by double click on item.vnc
-// instead run `vncviewer.exe -config addresbook\item.vnc`
-// or with passwd `vncviewer.exe -console -passwd - -config addresbook\item.vnc`
-// will be run `vncviewer.exe -config addresbook\item.vnc -ProxyType socks -ProxyServer :1080`
-// or with passwd `vncviewer.exe -console -passwd - -config addresbook\item.vnc -ProxyType socks -ProxyServer :1080`
-func VncAddrBook(vncviewer string) {
-	//netsh winhttp set proxy proxy-server="socks=localhost:1080" bypass-list="localhost"
-	const (
-		SOCKS   = "socks"
-		CONSOLE = "-console"
-	)
+// case $all_proxy has `socks://localhost:1080` then by double click on item.vnc
+// instead runing `vncviewer.exe -config addresbook\item.vnc`
+// will be run `vncviewer.exe -config addresbook\item.vnc -ProxyType=socks -ProxyServer=localhost:1080`
+// case $http_proxy has `http://localhost:3128` then by double click on itemWithPasswd.vnc
+// instead runing `vncviewer.exe -console -passwd - -config addresbook\itemWithPasswd.vnc`
+// will be run `vncviewer.exe -console -passwd - -config addresbook\itemWithPasswd.vnc -ProxyType=httpconnect -ProxyServer=localhost:3128`
+// case global is true then only `setX key val` or `SETENV key val` will be using
+// or `netsh winhttp set proxy proxy-server="http://localhost:3128;socks=localhost:1080"`
+// for unset http_proxy use `REG delete HKCU\Environment /F /V http_proxy`
+func VncAddrBook(global bool, vncviewer string) {
+	// netsh winhttp set proxy [proxy-server=]host[:port] [bypass-list=]"<local>;bar"
+	// netsh winhttp set proxy host[:port] as proxy-server="http=host[:port]"
+
+	// `netsh winhttp set proxy proxy-server="http=localhost:3128;socks=localhost:1080"`
+	// to do: parse bypass-list="<local>;bar;*.foo.com"
 	var (
 		stdin        io.WriteCloser
 		errStdinPipe error
@@ -34,7 +38,7 @@ func VncAddrBook(vncviewer string) {
 		vncViewer    = fmt.Sprintf(".%cvncviewer", os.PathSeparator)
 	)
 	if len(os.Args) > 1 {
-		passwd = os.Args[1] == CONSOLE
+		passwd = os.Args[1] == "-console"
 		if passwd || os.Args[1] == "-config" {
 		} else {
 			return
@@ -43,16 +47,15 @@ func VncAddrBook(vncviewer string) {
 		return
 	}
 	args := os.Args[1:]
-	proxy := get("http_proxy", "all_proxy") // socks://127.0.0.1:1080
-	if proxy != "" {
-		shp, err := url.Parse(proxy)
-		if err == nil {
-			ProxyType := "httpconnect"
-			if strings.HasPrefix(shp.Scheme, SOCKS) {
-				ProxyType = SOCKS
-			}
-			args = append(args, "-ProxyType="+ProxyType)
-			args = append(args, "-ProxyServer="+shp.Host)
+	http, _, _, socks := GetProxy()
+	fmt.Println("GetProxy", http, socks)
+	suff := SetProxy(global, "all_proxy", "socks", socks, "socks", "1080")
+	if len(suff) > 0 {
+		args = append(args, suff...)
+	} else {
+		suff = SetProxy(global, "http_proxy", "httpconnect", http, "http", "3128")
+		if len(suff) > 0 {
+			args = append(args, suff...)
 		}
 	}
 	if vncviewer == "" {
@@ -70,12 +73,33 @@ func VncAddrBook(vncviewer string) {
 	os.Exit(0)
 }
 
-func get(keys ...string) (val string) {
+// get proxy from env
+func SetProxy(global bool, env, ProxyType, ProxyServer, scheme, port string) (suff []string) {
+	if ProxyServer == "" {
+		proxy := GetX(global, env)
+		fmt.Println("GetX", proxy)
+		if !strings.HasPrefix(proxy, scheme) {
+			return
+		} else {
+			shp, err := url.Parse(proxy)
+			if err == nil {
+				ProxyServer = shp.Host
+			} else {
+				ProxyServer = "127.0.0.1:" + port
+			}
+		}
+	}
+	suff = append(suff, "-ProxyType="+ProxyType, "-ProxyServer="+ProxyServer)
+	return
+}
+
+// case global is true then only `setX key val` will be get
+func GetX(global bool, key string) (val string) {
 	var (
 		reg registry.Key
 		err error
 	)
-	errReg := fmt.Errorf("")
+	errReg := fmt.Errorf("no global")
 	if runtime.GOOS == "windows" {
 		// setx key val
 		reg, errReg = registry.OpenKey(registry.CURRENT_USER, "Environment", registry.QUERY_VALUE)
@@ -83,7 +107,7 @@ func get(keys ...string) (val string) {
 			defer reg.Close()
 		}
 	}
-	for _, key := range keys {
+	if !global {
 		val = os.Getenv(key)
 		if val != "" {
 			return
@@ -92,12 +116,52 @@ func get(keys ...string) (val string) {
 		if val != "" {
 			return
 		}
-		if errReg == nil {
-			val, _, err = reg.GetStringValue(key)
-			if err == nil && val != "" {
-				return
-			}
-			val, _, _ = reg.GetStringValue(strings.ToUpper(key))
+	}
+	if errReg == nil {
+		val, _, err = reg.GetStringValue(key)
+		if err == nil && val != "" {
+			return
+		}
+		val, _, _ = reg.GetStringValue(strings.ToUpper(key))
+	}
+	return
+}
+
+// get proxy from ie
+func GetProxy() (http, https, ftp, socks string) {
+	// `netsh winhttp import proxy source=ie`
+	if runtime.GOOS != "windows" {
+		return
+	}
+	reg, err := registry.OpenKey(registry.CURRENT_USER,
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)
+	if err != nil {
+		return
+	}
+	defer reg.Close()
+	ProxyEnable, _, err := reg.GetIntegerValue("ProxyEnable")
+	if err != nil || ProxyEnable == 0 {
+		return
+	}
+	ProxyServer, _, err := reg.GetStringValue("ProxyServer")
+	if err != nil {
+		return
+	}
+	for _, proxy := range strings.Split(ProxyServer, ";") {
+		kv := strings.Split(proxy, "=")
+		if len(kv) < 2 {
+			http = proxy
+			continue
+		}
+		switch kv[0] {
+		case "http":
+			http = kv[1]
+		case "https":
+			https = kv[1]
+		case "ftp":
+			ftp = kv[1]
+		case "socks":
+			socks = kv[1]
 		}
 	}
 	return
