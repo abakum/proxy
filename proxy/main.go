@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	proxy.VncAddrBook(true, "")
+	proxy.RealAddrBook("")
 }

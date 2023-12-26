@@ -166,3 +166,64 @@ func GetProxy() (http, https, ftp, socks string) {
 	}
 	return
 }
+
+func RealSet(ProxyType, ProxyServer string) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	k.SetStringValue("ProxyType", ProxyType)
+	k.SetStringValue("ProxyServer", ProxyServer)
+}
+
+func RealGet() (ProxyType, ProxyServer string) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, registry.QUERY_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	ProxyType, _, _ = k.GetStringValue("ProxyType")
+	ProxyServer, _, _ = k.GetStringValue("ProxyServer")
+	return
+}
+
+func RealAddrBook(vncviewer string) {
+	var (
+		stdin        io.WriteCloser
+		errStdinPipe error
+		passwd       bool
+		err          error
+		vncViewer    = fmt.Sprintf(".%cvncviewer", os.PathSeparator)
+	)
+	if len(os.Args) > 1 {
+		passwd = os.Args[1] == "-console"
+		if passwd || os.Args[1] == "-config" {
+		} else {
+			return
+		}
+	} else {
+		return
+	}
+	args := os.Args[1:]
+	ProxyType, ProxyServer := RealGet()
+	if ProxyServer != "" {
+		args = append(args, "-ProxyServer="+ProxyServer)
+		if ProxyType != "" {
+			args = append(args, "-ProxyType="+ProxyType)
+		}
+	}
+	if vncviewer == "" {
+		vncviewer = vncViewer
+	}
+	cmd := exec.Command(vncviewer, args...)
+	if passwd {
+		stdin, errStdinPipe = cmd.StdinPipe()
+	}
+	err = cmd.Start()
+	fmt.Println(cmd.Args, err, cmd.Dir)
+	if passwd && err == nil && errStdinPipe == nil {
+		io.Copy(stdin, os.Stdin) // transfers passwd from vncaddrbook to vncviewer
+	}
+	os.Exit(0)
+}
