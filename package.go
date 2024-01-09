@@ -182,8 +182,8 @@ func SetStringValues(k registry.Key, path string, mnv map[string]string) {
 // set RealVNC proxy
 func RealSet(ProxyType, ProxyServer string) {
 	SetStringValues(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, map[string]string{
-		ProxyType:   ProxyType,
-		ProxyServer: ProxyServer,
+		"ProxyType":   ProxyType,
+		"ProxyServer": ProxyServer,
 	})
 }
 
