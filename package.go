@@ -167,27 +167,51 @@ func GetProxy() (http, https, ftp, socks string) {
 	return
 }
 
-func RealSet(ProxyType, ProxyServer string) {
-	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, registry.SET_VALUE)
+// set string values by path
+func SetStringValues(k registry.Key, path string, mnv map[string]string) {
+	key, err := registry.OpenKey(k, path, registry.SET_VALUE)
 	if err != nil {
 		return
 	}
-	defer k.Close()
-	k.SetStringValue("ProxyType", ProxyType)
-	k.SetStringValue("ProxyServer", ProxyServer)
+	defer key.Close()
+	for name, val := range mnv {
+		key.SetStringValue(name, val)
+	}
 }
 
-func RealGet() (ProxyType, ProxyServer string) {
-	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, registry.QUERY_VALUE)
+// set RealVNC proxy
+func RealSet(ProxyType, ProxyServer string) {
+	SetStringValues(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, map[string]string{
+		ProxyType:   ProxyType,
+		ProxyServer: ProxyServer,
+	})
+}
+
+// get string values by path
+func GetStringValues(k registry.Key, path string, names ...string) (vals []string) {
+	vals = make([]string, len(names))
+	key, err := registry.OpenKey(k, path, registry.QUERY_VALUE)
 	if err != nil {
 		return
 	}
-	defer k.Close()
-	ProxyType, _, _ = k.GetStringValue("ProxyType")
-	ProxyServer, _, _ = k.GetStringValue("ProxyServer")
+	defer key.Close()
+	for i, name := range names {
+		vals[i], _, _ = key.GetStringValue(name)
+	}
 	return
 }
 
+// get RealVNC proxy
+func RealGet() (ProxyType, ProxyServer string) {
+	vals := GetStringValues(registry.CURRENT_USER, `SOFTWARE\RealVNC\vncviewer`, "ProxyType", "ProxyServer")
+	return vals[0], vals[1]
+}
+
+// if in the file .vnc from the address book the `ProxyServer` is empty, then `vncviewer` does not use the `ProxyServer` from the registry
+//
+// RealAddrBook(vncviewer) forcibly launches `vncviewer` from the address book using a "ProxyServer" from the registry
+//
+// place `proxy.exe` next to RealAddrBook.exe then run `RealAddrBook.exe -ViewerPath=proxy.exe` to use the `ProxyServer` from the registry
 func RealAddrBook(vncviewer string) {
 	var (
 		stdin        io.WriteCloser
